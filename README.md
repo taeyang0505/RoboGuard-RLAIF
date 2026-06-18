@@ -229,7 +229,34 @@ The following results were obtained by running `batch_eval.py` against a 5-query
 
 ---
 
+## Demo Screenshots
+
+### Vision RAG — Multimodal Query (PASS)
+
+A robot image is attached alongside the question. Gemini Vision performs a visual analysis of the hardware (joint count, cable types, warning labels), cross-references the findings against the UR10e manual, and returns a `Verified — PASS` response with source page citations in **16.1s** with zero revision cycles.
+
+![Vision RAG PASS demo](roboguard/assets/demo_vision.png)
+
+---
+
+### RLAIF Self-Correction Loop — Revision Cycles (FAIL → Retry)
+
+The same Vision RAG query under a harder hallucination-detection threshold. The judge model flags the first two responses as `FAIL` (visual observations not explicitly backed by the manual), triggering Reflexion-based episodic memory injection and re-generation. Total elapsed: **66.3s** across 3 attempts (2 revision cycles). The revision log and evaluator feedback are expandable inline.
+
+![RLAIF self-correction loop with FAIL and revision cycles](roboguard/assets/demo_fail.png)
+
+---
+
+### LangSmith MLOps Tracing
+
+Every inference run is automatically traced in LangSmith. The waterfall view shows per-node latency (`retrieve: 0.82s`, `generate: ~12s`, `evaluate: ~7s`) and token usage across all LLM calls. The right panel exposes the full `AgentState` — including `image_b64`, `trajectory_log`, `pass_fail`, and `source_pages` — making it straightforward to trace any failure back to its root cause.
+
+![LangSmith MLOps tracing dashboard](roboguard/assets/demo_langsmith.png)
+
+---
+
 ## Future Work
+
 
 | Priority | Item | Description |
 |----------|------|-------------|
