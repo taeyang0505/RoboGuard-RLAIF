@@ -58,33 +58,36 @@
 
 ```mermaid
 flowchart TD
-    A([User Query]) --> B
+    A(["🧑‍🔧 User Query\n+ Optional Image"])
 
-    subgraph LangGraph["LangGraph — Cyclic RLAIF Pipeline"]
-        direction TB
+    A --> B
 
-        B["retrieve\n──────────────\nEnvironment.step()\nChroma Vector DB\nTop-K Document Retrieval"]
+    B["🔍 retrieve\n───────────────\nEnvironment.step()\nChroma Vector DB · Top-K Docs\nSource Page Citation"]
 
-        B --> C
+    B --> C
 
-        C["generate\n──────────────\nPolicyActor\nMode 1: Base Policy π_base\nMode 2: Reflexion π_reflex\n(+ episodic memory injection)"]
+    C["🤖 generate\n───────────────\nPolicyActor\n① Base Policy π_base\n② Reflexion π_reflex\n   ↳ Episodic Memory Injection"]
 
-        C --> D
+    C --> D
 
-        D["evaluate\n──────────────\nRewardModel.score()\nLLM-as-a-judge\nCritique Token Parsing\nScore: +1.0 PASS / -1.0 FAIL"]
-    end
+    D["⚖️ evaluate\n───────────────\nRewardModel · LLM-as-a-judge\nCritique Token [PASS] / [FAIL]\nScore: +1.0 / −1.0\n📷 Multimodal Exception Filter"]
 
-    D -- "FAIL + retry available\n(Verbal Policy Update)" --> C
-    D -- "PASS or MAX_RETRIES reached" --> E
+    D -- "🔁 FAIL + retry available\nVerbal Policy Update" --> C
+    D -- "✅ PASS or MAX_RETRIES" --> E
 
-    E([Verified Response])
+    E(["✅ Verified Response\n+ Source Citation"])
 
-    style LangGraph fill:#1a1a2e,stroke:#4f46e5,color:#e8e8f0
+    F["📊 LangSmith MLOps\n───────────────\nTrace · Latency · Token Usage\nPASS/FAIL Distribution"]
+
+    C -.->|"auto-tracing"| F
+    D -.->|"auto-tracing"| F
+
+    style A fill:#374151,stroke:#9ca3af,color:#fff,rx:12
     style B fill:#1e3a5f,stroke:#60a5fa,color:#e8e8f0
     style C fill:#1e3a5f,stroke:#818cf8,color:#e8e8f0
     style D fill:#1e3a5f,stroke:#34d399,color:#e8e8f0
-    style A fill:#374151,stroke:#9ca3af,color:#fff
-    style E fill:#065f46,stroke:#34d399,color:#fff
+    style E fill:#065f46,stroke:#34d399,color:#fff,rx:12
+    style F fill:#292524,stroke:#f59e0b,color:#fde68a
 ```
 
 **RL 루프 제어 로직:**
@@ -225,10 +228,9 @@ The following results were obtained by running `batch_eval.py` against a 5-query
 
 | Priority | Item | Description |
 |----------|------|-------------|
-| **P1** | Source Citation | 검색된 청크의 원본 페이지 번호 및 섹션 메타데이터를 응답에 함께 표시. 출처 추적 가능한 Explainable AI 구현. |
+| **P1** | Re-Retrieval on FAIL | 환각 탐지 시 현재는 Reflexion 기반 에피소딕 메모리 재주입으로 교정하나, 향후 쿼리 재작성(Query Rewriting) 후 Vector DB를 재검색하는 동적 검색 루프로 확장 가능. |
 | **P2** | Async Streaming UI | LangGraph 노드 진행 상황을 실시간 스트리밍으로 UI에 중계. 체감 대기시간 단축 및 단계별 상태 가시성 확보. |
-| **P3** | Multimodal RAG | 매뉴얼 내 회로도, 부품 스펙 테이블, 경고 아이콘 등 비정형 시각 데이터 인식 및 검색 통합 (Vision RAG). |
-| **P4** | MLOps Integration | LangSmith 연동을 통한 파이프라인 트레이싱, Reward 분포 모니터링, 응답 품질 드리프트 감지 자동화. |
+| **P3** | Batch Eval Refresh | 현재 5-query 골든 데이터셋을 Vision RAG + 멀티모달 시나리오로 확장하여 이미지 입력 포함 회귀 테스트 자동화. |
 
 ---
 
