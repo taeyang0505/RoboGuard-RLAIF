@@ -96,6 +96,7 @@ class RoboGuardGraph:
         trajectory_log = state.get("trajectory_log", [])
 
         source_pages: list[int] = state.get("source_pages", [])
+        image_b64: str | None = state.get("image_b64")  # Phase 3: Vision RAG
 
         if retry_cnt == 0:
             print("[INFO] Generate: Producing initial response (base policy).")
@@ -103,6 +104,7 @@ class RoboGuardGraph:
                 context=state["context"],
                 question=state["question"],
                 source_pages=source_pages,
+                image_b64=image_b64,
             )
         else:
             print(
@@ -114,6 +116,7 @@ class RoboGuardGraph:
                 question=state["question"],
                 trajectory_log=trajectory_log,
                 source_pages=source_pages,
+                image_b64=image_b64,
             )
 
         return {
@@ -135,9 +138,11 @@ class RoboGuardGraph:
         """
         print("[INFO] Evaluate: Running fact-verification via LLM-as-a-judge.")
 
+        image_b64: str | None = state.get("image_b64")  # Phase 3: 판사도 동일 이미지 수신
         signal = self._reward_model.score(
             context=state["context"],
-            answer=state["answer"]
+            answer=state["answer"],
+            image_b64=image_b64,
         )
 
         if signal.pass_fail == "FAIL":

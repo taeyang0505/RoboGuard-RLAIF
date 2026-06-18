@@ -10,6 +10,8 @@ Reflexion 논문의 핵심 주장 (p.4):
 
 AgentState의 trajectory_log 필드가 이 에피소딕 메모리 역할을 합니다.
 """
+from __future__ import annotations
+from typing import Optional
 from typing_extensions import TypedDict
 
 
@@ -46,6 +48,7 @@ class AgentState(TypedDict):
     │ pass_fail       │ Self-RAG §3 — Critique Token ([PASS]/[FAIL])     │
     │ retry_count     │ InstructGPT §2.2 — RL iteration 카운터          │
     │ trajectory_log  │ Reflexion §3.2 — Episodic Memory Buffer          │
+    │ image_b64       │ Phase 3 — Multimodal Vision RAG 이미지 입력      │
     └─────────────────┴──────────────────────────────────────────────────┘
     """
     # ── 기본 RAG 입출력 ──────────────────────────────────────────────────────
@@ -61,3 +64,6 @@ class AgentState(TypedDict):
 
     # ── Reflexion 에피소딕 메모리 ─────────────────────────────────────────
     trajectory_log: list  # TrajectoryEntry 리스트 — 누적 실패 궤적 저장소
+
+    # ── Phase 3: Multimodal Vision RAG ───────────────────────────────────
+    image_b64: Optional[str]  # Base64 인코딩 이미지 (없으면 None — 텍스트 전용 모드)

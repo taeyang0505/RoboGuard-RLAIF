@@ -21,10 +21,17 @@ Self-RAG의 기여 (p.5):
   판사 LLM이 대괄호 없이 "PASS The response..." 형태로 판정을 반환할 경우에도
   올바르게 PASS(+1.0)로 인식하도록 정규식 기반 유연한 파싱 로직을 적용합니다.
   탐지 우선순위: 첫 줄(first line) → 전체 텍스트 앞 50자 → 전체 텍스트
+
+[v3.0 Multimodal Judge — 멀티모달 검증 비대칭성 해소]
+  Phase 3에서 Actor가 이미지를 수신해 시각적 분석을 수행하면,
+  해당 묘사는 텍스트 매뉴얼이 아닌 '이미지'에 근거한 사실입니다.
+  판사 모델도 동일한 이미지를 수신하고, 시각적 묘사는 이미지로,
+  기술 규격 및 수치는 텍스트 컨텍스트로 분리 검증합니다.
 """
 import re
 from dataclasses import dataclass
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from .config import CONFIG
@@ -49,6 +56,16 @@ in the reference document.
 - Output [FAIL] on the first line if the response contains any information not found in the \
 reference document, including inferred, assumed, or externally sourced content.
 - After the verdict, provide a concise rationale (1-2 sentences).
+
+Critical Exception — Multimodal Visual Analysis:
+  If the user attached an image (the image is provided to you alongside this prompt), \
+the response may contain visual descriptions derived directly from that image \
+(e.g., robot color, component condition, cable routing, error codes on screen, \
+LED indicator states, warning labels, visible damage).
+  You MUST NOT penalize or mark as [FAIL] for such visual observations. \
+Those descriptions are grounded in the user-provided image, NOT in the reference document.
+  Evaluate ONLY technical specifications, numerical values, and procedural \
+claims against the provided Reference Document text.
 
 Reference Document:
 {context}
@@ -100,16 +117,27 @@ class RewardModel:
             temperature=CONFIG.model.LLM_TEMPERATURE
         )
 
-    def score(self, context: str, answer: str) -> RewardSignal:
+    def score(
+        self,
+        context: str,
+        answer: str,
+        image_b64: str | None = None,
+    ) -> RewardSignal:
         """
         (context, answer) 쌍에 보상 신호를 계산합니다.
 
         [InstructGPT §2.2]: r = RM(x, y) — 스칼라 보상 산출
         [Self-RAG §3]:       크리틱 토큰 [PASS]/[FAIL] 파싱
 
+        [v3.0 Multimodal Judge]
+        image_b64가 제공되면 판사 모델도 동일한 이미지를 수신합니다.
+        이를 통해 시각적 분석 결과를 매뉴얼 미수록 정보로 오판하는
+        '멀티모달 검증 비대칭성' 문제를 해소합니다.
+
         Args:
-            context : Vector DB에서 검색된 매뉴얼 텍스트 (ground truth)
-            answer  : PolicyActor가 생성한 답변
+            context   : Vector DB에서 검색된 매뉴얼 텍스트 (ground truth)
+            answer    : PolicyActor가 생성한 답변
+            image_b64 : Base64 인코딩 이미지 (Phase 3 Vision RAG, 없으면 None)
         Returns:
             RewardSignal: pass_fail, feedback(언어적 피드백), score(스칼라)
         """
@@ -117,7 +145,16 @@ class RewardModel:
             context=context,
             answer=answer
         )
-        raw_output = str(self._llm.invoke(prompt).content)
+        # ── Phase 3: 판사 모델에도 이미지 전달 (멀티모달 검증 비대칭성 해소) ───
+        # 항상 list[HumanMessage] 형태로 전달 → Sequence[MessageLikeRepresentation] 타입 보장
+        if image_b64:
+            message = HumanMessage(content=[
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            ])
+        else:
+            message = HumanMessage(content=prompt)
+        raw_output = str(self._llm.invoke([message]).content)
 
         # ── Robust Critique Token 파싱 [v2.2 Bug Fix] ──────────────────
         # Self-RAG 스타일의 [PASS]/[FAIL] 구조화 토큰뿐 아니라,

@@ -11,10 +11,16 @@ Phase 1 — Streaming UI:
   st.status 컨텍스트로 LangGraph 각 노드 진행 상황을 실시간 중계합니다.
   최종 답변은 st.write_stream generator를 통해 타자 출력 방식으로 렌더링합니다.
 
+Phase 3 — Multimodal Vision RAG:
+  사이드바 파일 업로더로 PNG/JPG 이미지를 수신하고 Base64로 인코딩하여
+  LangGraph 초기 상태에 image_b64로 주입합니다.
+  Gemini Vision 모델이 이미지를 시각 분석하고 매뉴얼 컨텍스트와 교차 검증합니다.
+
 실행 방법:
   ./.venv/bin/streamlit run app.py
 """
 import re
+import base64
 import time
 import threading
 import queue
@@ -202,14 +208,33 @@ with st.sidebar:
         st.session_state.stats = []
         st.rerun()
 
-    st.caption("RoboGuard v2.1 — Source Citation & Streaming UI")
+    # ── Phase 3: Vision RAG ────────────────────────────────────────────────
+    st.divider()
+    st.markdown("#### 📸 Vision Input (Optional)")
+    uploaded_file = st.file_uploader(
+        "Upload an image for visual analysis",
+        type=["png", "jpg", "jpeg"],
+        help="Attach a photo of the robot error screen or component for AI-powered visual diagnosis.",
+        label_visibility="collapsed",
+    )
+    if uploaded_file is not None:
+        st.image(uploaded_file, caption="Attached image", width="stretch")
+        st.session_state.pending_image_b64 = base64.b64encode(
+            uploaded_file.read()
+        ).decode("utf-8")
+    else:
+        st.session_state.pending_image_b64 = None
+
+    st.caption("RoboGuard v3.0 — Vision RAG · Source Citation · Streaming UI")
 
 
-# ─── 세션 상태 초기화 ─────────────────────────────────────────────────────
+# ─── 세션 상태 초기화 ─────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []   # 채팅 메시지 히스토리
 if "stats" not in st.session_state:
     st.session_state.stats = []      # 각 응답의 RL 통계
+if "pending_image_b64" not in st.session_state:
+    st.session_state.pending_image_b64 = None  # Phase 3: 업로드 대기 중 이미지
 
 
 # ─── LangGraph 앱 캐싱 (매 질문마다 재빌드 방지) ──────────────────────────
@@ -249,7 +274,7 @@ def _token_stream(text: str, delay: float = 0.012):
         time.sleep(delay)
 
 
-# ─── 메인 헤더 ────────────────────────────────────────────────────────────
+# ─── 메인 헤더 ──────────────────────────────────────────────────
 st.markdown('<div class="hero-title">⚙️ RoboGuard — UR10e Technical Support</div>', unsafe_allow_html=True)
 st.markdown(
     "Document-grounded QA system for UR10e robot operations. "
@@ -261,6 +286,18 @@ st.divider()
 for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "⚙️"):
         st.markdown(msg["content"])
+
+        # Phase 3: 사용자 메시지에 이미지 썸네일 표시 (히스토리 재렌더링)
+        if msg["role"] == "user":
+            msg_idx = i // 2
+            if msg_idx < len(st.session_state.stats):
+                stat_img = st.session_state.stats[msg_idx].get("image_b64")
+                if stat_img:
+                    st.image(
+                        base64.b64decode(stat_img),
+                        caption="📸 Attached image",
+                        width=240,
+                    )
 
         # Show verification badge on assistant messages only
         if msg["role"] == "assistant" and i // 2 < len(st.session_state.stats):
@@ -289,9 +326,17 @@ for i, msg in enumerate(st.session_state.messages):
 if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum payload capacity)"):
 
     # 1) User message
+    image_b64_current: str | None = st.session_state.get("pending_image_b64")
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
+        # Phase 3: 현재 메시지에 첨부 이미지 표시
+        if image_b64_current:
+            st.image(
+                base64.b64decode(image_b64_current),
+                caption="📸 Attached image",
+                width=240,
+            )
 
     # 2) Assistant response
     with st.chat_message("assistant", avatar="⚙️"):
@@ -324,6 +369,7 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
                     "feedback": "",
                     "pass_fail": "",
                     "source_pages": [],
+                    "image_b64": image_b64_current,  # Phase 3: Vision RAG
                 })
                 result_queue.put(r)
 
@@ -407,4 +453,7 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
         "retries":     retries,
         "elapsed":     elapsed,
         "source_pages": src_pages,
+        "image_b64":   image_b64_current,  # Phase 3: 썬네일 재렌더링 용
     })
+    # Phase 3: 다음 질문에서 동일 이미지가 중복 로드되지 않도록
+    # 사이드바 uploader는 Streamlit 자체 상태로 관리되므로 별도 reset 불필요

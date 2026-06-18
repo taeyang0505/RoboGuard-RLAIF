@@ -21,6 +21,7 @@ Phase 1 — Source Citation:
 """
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
 
 from .config import CONFIG
 
@@ -59,6 +60,9 @@ Constraints:
 "The requested information is not available in the provided documentation."
 - When citing numerical values (current, voltage, weight, distance, etc.), \
 use only the values explicitly stated in the document.
+- If an image is attached by the user, perform a precise visual analysis of the image \
+(error codes, component conditions, connector states, LED indicators, warning labels, etc.) \
+and cross-reference your visual findings against the reference document context before answering.
 - At the end of your response, append the following citation line exactly as provided, \
 on a new line preceded by a blank line:
   {citation}
@@ -89,6 +93,9 @@ Revision Instructions:
 "The requested information is not available in the provided documentation."
 - When citing numerical values (current, voltage, weight, distance, etc.), \
 use only the values explicitly stated in the document.
+- If an image is attached by the user, perform a precise visual analysis of the image \
+(error codes, component conditions, connector states, LED indicators, warning labels, etc.) \
+and cross-reference your visual findings against the reference document context before answering.
 - At the end of your response, append the following citation line exactly as provided, \
 on a new line preceded by a blank line:
   {citation}
@@ -152,6 +159,7 @@ class PolicyActor:
         context: str,
         question: str,
         source_pages: list[int] | None = None,
+        image_b64: str | None = None,
     ) -> str:
         """
         첫 번째 답변 생성 — 기본 정책 실행 (π_base).
@@ -163,16 +171,26 @@ class PolicyActor:
             context      : 검색된 매뉴얼 컨텍스트
             question     : 작업자 질문
             source_pages : 참조 페이지 번호 목록 (Source Citation)
+            image_b64    : Base64 인코딩 이미지 문자열 (Phase 3 Vision RAG, 없으면 None)
         Returns:
             생성된 답변 문자열 (말미에 출처 표기 포함)
         """
         citation = _format_citation(source_pages or [])
-        prompt = _INITIAL_PROMPT_TEMPLATE.format(
+        prompt_text = _INITIAL_PROMPT_TEMPLATE.format(
             context=context,
             question=question,
             citation=citation,
         )
-        return str(self._llm.invoke(prompt).content)
+        # ── Phase 3: 멀티모달 / 텍스트 전용 분기 ────────────────────────────
+        # 항상 list[HumanMessage] 형태로 전달 → Sequence[MessageLikeRepresentation] 타입 보장
+        if image_b64:
+            message = HumanMessage(content=[
+                {"type": "text", "text": prompt_text},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            ])
+        else:
+            message = HumanMessage(content=prompt_text)
+        return str(self._llm.invoke([message]).content)
 
     def reflect_and_refine(
         self,
@@ -180,6 +198,7 @@ class PolicyActor:
         question: str,
         trajectory_log: list,
         source_pages: list[int] | None = None,
+        image_b64: str | None = None,
     ) -> str:
         """
         실패 궤적을 읽고 자기 반성 후 답변을 재작성 — 반성 정책 (π_reflex).
@@ -193,15 +212,25 @@ class PolicyActor:
             question       : 작업자 질문
             trajectory_log : 과거 모든 시도의 (answer, feedback, pass_fail) 리스트
             source_pages   : 참조 페이지 번호 목록 (Source Citation)
+            image_b64      : Base64 인코딩 이미지 문자열 (Phase 3 Vision RAG, 없으면 None)
         Returns:
             재작성된 답변 문자열 (말미에 출처 표기 포함)
         """
         trajectory_summary = _format_trajectory(trajectory_log)
         citation = _format_citation(source_pages or [])
-        prompt = _REFLECTION_PROMPT_TEMPLATE.format(
+        prompt_text = _REFLECTION_PROMPT_TEMPLATE.format(
             trajectory_summary=trajectory_summary,
             context=context,
             question=question,
             citation=citation,
         )
-        return str(self._llm.invoke(prompt).content)
+        # ── Phase 3: 멀티모달 / 텍스트 전용 분기 ────────────────────────────
+        # 항상 list[HumanMessage] 형태로 전달 → Sequence[MessageLikeRepresentation] 타입 보장
+        if image_b64:
+            message = HumanMessage(content=[
+                {"type": "text", "text": prompt_text},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            ])
+        else:
+            message = HumanMessage(content=prompt_text)
+        return str(self._llm.invoke([message]).content)
