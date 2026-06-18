@@ -14,6 +14,10 @@ Reflexion 논문의 핵심 주장 (p.4):
 
 generate_initial()   → 기본 정책 (InstructGPT SFT 단계 대응)
 reflect_and_refine() → 자기 반성 정책 (Reflexion Verbal RL 핵심)
+
+Phase 1 — Source Citation:
+  source_pages 파라미터를 받아 프롬프트에 출처 명시 지시를 포함합니다.
+  LLM은 참조 페이지를 기반으로 답변 말미에 출처를 명시합니다.
 """
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -21,6 +25,24 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from .config import CONFIG
 
 load_dotenv()
+
+
+# ── 출처 포맷 헬퍼 ────────────────────────────────────────────────────────
+
+def _format_citation(source_pages: list[int]) -> str:
+    """
+    페이지 번호 목록을 출처 문자열로 변환합니다.
+
+    Args:
+        source_pages: 정렬된 1-indexed 페이지 번호 목록
+    Returns:
+        "[Reference: UR10e Manual, p. 12, 15, 23]" 형태의 문자열,
+        또는 페이지 정보가 없을 경우 빈 문자열
+    """
+    if not source_pages:
+        return ""
+    pages_str = ", ".join(f"p. {p}" for p in source_pages)
+    return f"[Reference: UR10e User Manual, {pages_str}]"
 
 
 # ── 프롬프트 템플릿 ───────────────────────────────────────────────────────
@@ -37,6 +59,9 @@ Constraints:
 "The requested information is not available in the provided documentation."
 - When citing numerical values (current, voltage, weight, distance, etc.), \
 use only the values explicitly stated in the document.
+- At the end of your response, append the following citation line exactly as provided, \
+on a new line preceded by a blank line:
+  {citation}
 
 Reference Document:
 {context}
@@ -64,6 +89,9 @@ Revision Instructions:
 "The requested information is not available in the provided documentation."
 - When citing numerical values (current, voltage, weight, distance, etc.), \
 use only the values explicitly stated in the document.
+- At the end of your response, append the following citation line exactly as provided, \
+on a new line preceded by a blank line:
+  {citation}
 
 Reference Document:
 {context}
@@ -119,23 +147,30 @@ class PolicyActor:
             temperature=CONFIG.model.LLM_TEMPERATURE
         )
 
-    def generate_initial(self, context: str, question: str) -> str:
+    def generate_initial(
+        self,
+        context: str,
+        question: str,
+        source_pages: list[int] | None = None,
+    ) -> str:
         """
         첫 번째 답변 생성 — 기본 정책 실행 (π_base).
 
         [InstructGPT §2.1 "SFT Policy"]
         피드백 없이 매뉴얼(context)과 질문(question)만으로 답변을 생성합니다.
-        이는 InstructGPT의 SFT 단계에서 기본 정책이 행동을 출력하는 것과 동일합니다.
 
         Args:
-            context : 검색된 매뉴얼 컨텍스트
-            question: 작업자 질문
+            context      : 검색된 매뉴얼 컨텍스트
+            question     : 작업자 질문
+            source_pages : 참조 페이지 번호 목록 (Source Citation)
         Returns:
-            생성된 답변 문자열
+            생성된 답변 문자열 (말미에 출처 표기 포함)
         """
+        citation = _format_citation(source_pages or [])
         prompt = _INITIAL_PROMPT_TEMPLATE.format(
             context=context,
-            question=question
+            question=question,
+            citation=citation,
         )
         return str(self._llm.invoke(prompt).content)
 
@@ -143,7 +178,8 @@ class PolicyActor:
         self,
         context: str,
         question: str,
-        trajectory_log: list
+        trajectory_log: list,
+        source_pages: list[int] | None = None,
     ) -> str:
         """
         실패 궤적을 읽고 자기 반성 후 답변을 재작성 — 반성 정책 (π_reflex).
@@ -152,19 +188,20 @@ class PolicyActor:
         trajectory_log 전체(누적 실패 기억)를 LLM 컨텍스트에 주입하여
         명시적 그래디언트(가중치 업데이트) 없이 Verbal Policy Update를 달성합니다.
 
-        "언어 모델 자체가 Policy Network이자 Value Function이다" — Reflexion p.5
-
         Args:
             context        : 검색된 매뉴얼 컨텍스트
             question       : 작업자 질문
             trajectory_log : 과거 모든 시도의 (answer, feedback, pass_fail) 리스트
+            source_pages   : 참조 페이지 번호 목록 (Source Citation)
         Returns:
-            재작성된 답변 문자열
+            재작성된 답변 문자열 (말미에 출처 표기 포함)
         """
         trajectory_summary = _format_trajectory(trajectory_log)
+        citation = _format_citation(source_pages or [])
         prompt = _REFLECTION_PROMPT_TEMPLATE.format(
             trajectory_summary=trajectory_summary,
             context=context,
-            question=question
+            question=question,
+            citation=citation,
         )
         return str(self._llm.invoke(prompt).content)

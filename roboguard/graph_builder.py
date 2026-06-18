@@ -60,20 +60,24 @@ class RoboGuardGraph:
         """
         [Self-RAG §2 "Retrieve" 단계 + Reflexion §3.1 "Environment" 관찰]
 
-        Vector DB에서 관련 매뉴얼 컨텍스트를 검색합니다.
-        RL 루프 재시도 시에는 검색을 생략하고 기존 context를 재사용합니다.
+        Vector DB에서 관련 매뉴얼 컨텍스트와 참조 페이지 번호를 검색합니다.
+        RL 루프 재시도 시에는 검색을 생략하고 기존 context/source_pages를 재사용합니다.
         (API 호출 최소화 + Self-RAG의 선택적 검색 정신 반영)
 
         State 읽기: question, retry_count
-        State 쓰기: context
+        State 쓰기: context, source_pages
         """
         retry_cnt = state.get("retry_count", 0)
         # 첫 시도일 때만 검색 (재시도 시 동일 질문이므로 결과 동일)
         if retry_cnt == 0:
             print("[INFO] Retrieve: Querying Vector DB for relevant context.")
-            context = self._env.step(state["question"])
-            return {"context": context}
-        # 재시도: 기존 context 유지 (state 변경 없음)
+            result = self._env.step_with_citations(state["question"])
+            print(
+                f"[INFO] Retrieve: {len(result.source_pages)} unique page(s) referenced "
+                f"— {result.source_pages}"
+            )
+            return {"context": result.context, "source_pages": result.source_pages}
+        # 재시도: 기존 context/source_pages 유지 (state 변경 없음)
         return {}
 
     # ─── 노드 2: Actor — 정책 네트워크 ─────────────────────────────────────
@@ -91,11 +95,14 @@ class RoboGuardGraph:
         retry_cnt = state.get("retry_count", 0)
         trajectory_log = state.get("trajectory_log", [])
 
+        source_pages: list[int] = state.get("source_pages", [])
+
         if retry_cnt == 0:
             print("[INFO] Generate: Producing initial response (base policy).")
             answer = self._actor.generate_initial(
                 context=state["context"],
-                question=state["question"]
+                question=state["question"],
+                source_pages=source_pages,
             )
         else:
             print(
@@ -105,7 +112,8 @@ class RoboGuardGraph:
             answer = self._actor.reflect_and_refine(
                 context=state["context"],
                 question=state["question"],
-                trajectory_log=trajectory_log
+                trajectory_log=trajectory_log,
+                source_pages=source_pages,
             )
 
         return {

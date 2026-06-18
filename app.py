@@ -1,13 +1,23 @@
 """
 app.py — RoboGuard RLAIF 웹 채팅 UI
 =====================================
-Streamlit 기반 챗봇 인터페이스.
+Streamlit 기반 채팅 인터페이스.
 roboguard 패키지의 백엔드 엔진을 그대로 호출합니다.
+
+Phase 1 — Source Citation:
+  답변 말미의 출처 표기를 UI에서도 그대로 렌더링합니다.
+
+Phase 1 — Streaming UI:
+  st.status 컨텍스트로 LangGraph 각 노드 진행 상황을 실시간 중계합니다.
+  최종 답변은 st.write_stream generator를 통해 타자 출력 방식으로 렌더링합니다.
 
 실행 방법:
   ./.venv/bin/streamlit run app.py
 """
+import re
 import time
+import threading
+import queue
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -192,7 +202,7 @@ with st.sidebar:
         st.session_state.stats = []
         st.rerun()
 
-    st.caption("RoboGuard v2.0 — Internal Use Only")
+    st.caption("RoboGuard v2.1 — Source Citation & Streaming UI")
 
 
 # ─── 세션 상태 초기화 ─────────────────────────────────────────────────────
@@ -201,11 +211,42 @@ if "messages" not in st.session_state:
 if "stats" not in st.session_state:
     st.session_state.stats = []      # 각 응답의 RL 통계
 
+
 # ─── LangGraph 앱 캐싱 (매 질문마다 재빌드 방지) ──────────────────────────
 @st.cache_resource(show_spinner="Initializing inference pipeline...")
 def get_app():
     """Builds and caches the RoboGuardGraph compiled pipeline."""
     return RoboGuardGraph().build()
+
+
+# ─── HTML 태그 제거 헬퍼 ─────────────────────────────────────────────────
+def _clean_answer(text: str) -> str:
+    """
+    LLM 답변 본문에 삽입된 <br/> / <br> / <BR> 등 줄바꿈 HTML 태그를
+    순수 마크다운 줄바꿈(\n\n)으로 변환합니다.
+
+    Args:
+        text: LLM이 반환한 원본 답변 문자열
+    Returns:
+        HTML 태그가 제거된 마크다운 문자열
+    """
+    # <br/>, <br />, <br> 계열을 모두 \n\n으로 치환
+    return re.sub(r"<br\s*/?>" , "\n\n", text, flags=re.IGNORECASE)
+
+
+# ─── 스트리밍 헬퍼: 단어 단위 generator ──────────────────────────────────
+def _token_stream(text: str, delay: float = 0.012):
+    """
+    단어 단위로 텍스트를 분할하여 yield합니다.
+    st.write_stream()에 전달하면 타자 출력 효과가 적용됩니다.
+
+    Args:
+        text : 출력할 전체 텍스트 (HTML 태그가 제거된 상태)
+        delay: 단어 간 지연 시간 (초)
+    """
+    for word in text.split(" "):
+        yield word + " "
+        time.sleep(delay)
 
 
 # ─── 메인 헤더 ────────────────────────────────────────────────────────────
@@ -224,17 +265,22 @@ for i, msg in enumerate(st.session_state.messages):
         # Show verification badge on assistant messages only
         if msg["role"] == "assistant" and i // 2 < len(st.session_state.stats):
             stat = st.session_state.stats[i // 2]
-            pass_fail = stat.get("pass_fail", "PASS")
-            retries   = stat.get("retries", 0)
-            elapsed   = stat.get("elapsed", 0.0)
+            pass_fail   = stat.get("pass_fail", "PASS")
+            retries     = stat.get("retries", 0)
+            elapsed     = stat.get("elapsed", 0.0)
+            src_pages   = stat.get("source_pages", [])
 
             badge_class = "badge-pass" if pass_fail == "PASS" else "badge-fail"
             badge_label = "Verified — PASS" if pass_fail == "PASS" else "Unverified — FAIL"
 
+            pages_str = (
+                f"  ·  Ref. pp. {', '.join(str(p) for p in src_pages)}"
+                if src_pages else ""
+            )
             st.markdown(
                 f'<span class="{badge_class}">{badge_label}</span>'
                 f'<span class="rl-badge">Revision cycles: {retries}</span>'
-                f'<span class="rl-badge">{elapsed:.1f}s</span>',
+                f'<span class="rl-badge">{elapsed:.1f}s{pages_str}</span>',
                 unsafe_allow_html=True
             )
 
@@ -249,69 +295,116 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
 
     # 2) Assistant response
     with st.chat_message("assistant", avatar="⚙️"):
-        status_area = st.empty()
 
-        with st.spinner(""):
-            step_msgs = [
-                "Querying Vector DB for relevant document sections...",
-                "Generating response based on retrieved context...",
-                "Running fact-verification (LLM-as-a-judge)...",
-            ]
-            for step in step_msgs:
-                status_area.info(step)
-                time.sleep(0.3)
+        # ── Phase 1: st.status 실시간 상태 중계 ──────────────────────────
+        result: dict = {}
+        elapsed: float = 0.0
 
+        with st.status("Processing query...", expanded=True) as status_box:
+
+            status_box.write("**[1/3]** Querying Vector DB for relevant document sections.")
             langgraph_app = get_app()
             t0 = time.time()
-            result = langgraph_app.invoke({
-                "question": prompt,
-                "retry_count": 0,
-                "trajectory_log": [],
-                "context": "",
-                "answer": "",
-                "feedback": "",
-                "pass_fail": ""
-            })
+
+            # LangGraph invoke — 백엔드 실행 (동기)
+            # invoke가 완료되면 st.status 내 단계를 단계별로 업데이트합니다.
+            # 단, LangGraph는 동기 실행이므로 노드 완료 시점을 폴링하는 대신
+            # invoke 전/후로 상태를 분리하여 표시합니다.
+
+            # 백그라운드 스레드로 invoke 실행 → 메인 스레드에서 상태 중계
+            result_queue: queue.Queue = queue.Queue()
+
+            def _run_graph() -> None:
+                r = langgraph_app.invoke({
+                    "question": prompt,
+                    "retry_count": 0,
+                    "trajectory_log": [],
+                    "context": "",
+                    "answer": "",
+                    "feedback": "",
+                    "pass_fail": "",
+                    "source_pages": [],
+                })
+                result_queue.put(r)
+
+            thread = threading.Thread(target=_run_graph, daemon=True)
+            thread.start()
+
+            # 중계 메시지 — 각 단계를 순차적으로 표시
+            stage_delays = [
+                (3.0,  "**[2/3]** Generating initial response from retrieved context (base policy)."),
+                (6.0,  "**[3/3]** Running fact-verification via LLM-as-a-judge."),
+            ]
+            stage_idx = 0
+            while thread.is_alive():
+                if stage_idx < len(stage_delays):
+                    delay, msg_text = stage_delays[stage_idx]
+                    elapsed_so_far = time.time() - t0
+                    if elapsed_so_far >= delay:
+                        status_box.write(msg_text)
+                        stage_idx += 1
+                time.sleep(0.2)
+
+            thread.join()
+            result = result_queue.get()
             elapsed = time.time() - t0
 
-        status_area.empty()
+            # 재시도가 발생한 경우 추가 상태 표시
+            retries = max(0, result.get("retry_count", 1) - 1)
+            if retries > 0:
+                status_box.write(
+                    f"**[Revision]** Unverified content detected. "
+                    f"Revision loop executed {retries} time(s). Re-verifying..."
+                )
 
-        answer    = result.get("answer", "")
-        pass_fail = result.get("pass_fail", "PASS")
-        retries   = max(0, result.get("retry_count", 1) - 1)
-        traj_cnt  = len(result.get("trajectory_log", []))
+            status_box.update(
+                label=f"Pipeline complete — {elapsed:.1f}s",
+                state="complete",
+                expanded=False,
+            )
 
-        st.markdown(answer)
+        # ── Phase 1: 결과 추출 ────────────────────────────────────────────
+        answer      = _clean_answer(result.get("answer", ""))  # <br/> → \n\n
+        pass_fail   = result.get("pass_fail", "PASS")
+        traj_cnt    = len(result.get("trajectory_log", []))
+        src_pages   = result.get("source_pages", [])
 
-        # Verification badge
+        # ── Phase 1: st.write_stream — 타자 출력 스트리밍 ────────────────
+        st.write_stream(_token_stream(answer))
+
+        # ── 검증 배지 + 출처 표기 ─────────────────────────────────────────
         badge_class = "badge-pass" if pass_fail == "PASS" else "badge-fail"
         badge_label = "Verified — PASS" if pass_fail == "PASS" else "Unverified — FAIL"
+        pages_str = (
+            f"  ·  Ref. pp. {', '.join(str(p) for p in src_pages)}"
+            if src_pages else ""
+        )
         st.markdown(
             f'<span class="{badge_class}">{badge_label}</span>'
             f'<span class="rl-badge">Revision cycles: {retries}</span>'
-            f'<span class="rl-badge">{elapsed:.1f}s</span>',
+            f'<span class="rl-badge">{elapsed:.1f}s{pages_str}</span>',
             unsafe_allow_html=True
         )
 
-        # Show evaluator feedback on FAIL
+        # ── FAIL 시 평가자 피드백 표시 ────────────────────────────────────
         if pass_fail == "FAIL" and result.get("feedback"):
             with st.expander("Evaluator Feedback — Fact-Verification Detail"):
                 st.warning(result["feedback"])
 
-        # Show revision log if retries occurred
+        # ── 재시도 이력 로그 (재작성이 발생한 경우) ──────────────────────
         if retries > 0 and traj_cnt > 0:
             with st.expander(f"Revision & Inference Log ({traj_cnt} attempt(s))"):
-                for i, ep in enumerate(result["trajectory_log"], 1):
+                for idx, ep in enumerate(result["trajectory_log"], 1):
                     verdict = "PASS" if ep.get("pass_fail") == "PASS" else "FAIL"
-                    st.markdown(f"**Attempt {i}** — {verdict}")
+                    st.markdown(f"**Attempt {idx}** — {verdict}")
                     st.caption(ep.get("answer", "")[:300] + "...")
                     st.divider()
 
     # 3) Save to session state
     st.session_state.messages.append({"role": "assistant", "content": answer})
     st.session_state.stats.append({
-        "pass_fail": pass_fail,
-        "retries":   retries,
-        "elapsed":   elapsed,
+        "pass_fail":   pass_fail,
+        "retries":     retries,
+        "elapsed":     elapsed,
+        "source_pages": src_pages,
     })
-

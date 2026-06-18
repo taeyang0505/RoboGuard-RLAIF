@@ -126,7 +126,8 @@ def run_batch_eval() -> None:
                 "context": "",
                 "answer": "",
                 "feedback": "",
-                "pass_fail": ""
+                "pass_fail": "",
+                "source_pages": [],
             })
             elapsed = time.time() - start_t
 

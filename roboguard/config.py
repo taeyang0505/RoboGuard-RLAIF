@@ -5,8 +5,51 @@ config.py — 중앙 설정 관리자 (Single Source of Truth)
 단일 파일만 수정하면 전체 파이프라인 동작이 바뀝니다.
 
 설계 원칙: 12-Factor App의 "Config" 팩터 + dataclass frozen=True (불변성 보장)
+
+Phase 2 — LangSmith MLOps:
+  load_dotenv()로 .env를 로드한 후, LangChain 환경변수를 os.environ에
+  명시적으로 바인딩합니다. LangGraph 실행시 자동으로 LangSmith에
+  트레이스가 전송됩니다 (코드 변경 무필요).
 """
+import logging
+import os
 from dataclasses import dataclass, field
+from dotenv import load_dotenv
+
+
+# ── 환경변수 로드 (애플리케이션 시작 시 가장 먼저 실행) ────────────────
+load_dotenv()
+
+_logger = logging.getLogger(__name__)
+
+
+# ── Phase 2: LangSmith MLOps 모니터링 환경변수 바인딩 ────────────────────
+# LangChain의 LANGCHAIN_TRACING_V2 환경변수가 True이면
+# LangGraph의 모든 노드 실행이 자동으로 LangSmith로 트레이스됩니다.
+# 코드 변경 없이 .env 파일만 수정하면 동작합니다.
+_LANGSMITH_VARS = (
+    "LANGCHAIN_TRACING_V2",
+    "LANGCHAIN_ENDPOINT",
+    "LANGCHAIN_API_KEY",
+    "LANGCHAIN_PROJECT",
+)
+for _var in _LANGSMITH_VARS:
+    _val = os.getenv(_var, "")
+    if _val:
+        os.environ.setdefault(_var, _val)
+
+_langsmith_key = os.getenv("LANGCHAIN_API_KEY", "")
+if not _langsmith_key:
+    _logger.warning(
+        "[RoboGuard] LANGCHAIN_API_KEY가 설정되지 않았습니다. "
+        "LangSmith 트레이싱이 비활성화됩니다. "
+        ".env 파일에 LANGCHAIN_API_KEY를 입력해 주세요."
+    )
+else:
+    _logger.info(
+        "[RoboGuard] LangSmith 트레이싱 활성화 — 프로젝트: %s",
+        os.getenv("LANGCHAIN_PROJECT", "RoboGuard-RLAIF"),
+    )
 
 
 # ──────────────────────────────────────────────────────────────

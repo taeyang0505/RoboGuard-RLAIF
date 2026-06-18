@@ -16,7 +16,13 @@ Self-RAG의 기여 (p.5):
   - LLM(Gemini)이 인간 레이블러를 대체하는 RM 역할 (InstructGPT)
   - [PASS]/[FAIL] 구조화 크리틱 토큰으로 출력 파싱 (Self-RAG 단순화)
   - PASS=+1.0, FAIL=-1.0 스칼라 보상 (InstructGPT KL 패널티 개념의 이산화)
+
+[v2.2 Robust Parsing — Bug Fix]
+  판사 LLM이 대괄호 없이 "PASS The response..." 형태로 판정을 반환할 경우에도
+  올바르게 PASS(+1.0)로 인식하도록 정규식 기반 유연한 파싱 로직을 적용합니다.
+  탐지 우선순위: 첫 줄(first line) → 전체 텍스트 앞 50자 → 전체 텍스트
 """
+import re
 from dataclasses import dataclass
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -113,8 +119,33 @@ class RewardModel:
         )
         raw_output = str(self._llm.invoke(prompt).content)
 
-        # Self-RAG Critique Token 파싱: [PASS] / [FAIL] 감지
-        pass_fail = "PASS" if "[PASS]" in raw_output.upper() else "FAIL"
+        # ── Robust Critique Token 파싱 [v2.2 Bug Fix] ──────────────────
+        # Self-RAG 스타일의 [PASS]/[FAIL] 구조화 토큰뿐 아니라,
+        # 판사 LLM이 "PASS The response..." 처럼 대괄호 없이 반환하는 경우도
+        # 정상적으로 PASS(+1.0)로 인식합니다.
+        #
+        # 탐지 전략 (우선순위 순):
+        #   1) 첫 줄(first line)에 독립 단어 'PASS' 또는 'FAIL' 포함 여부
+        #   2) 전체 텍스트 앞 50자 내 독립 단어 탐지 (fallback)
+        #   3) 위 모두 해당 없을 시 → 보수적으로 FAIL 처리
+        _PASS_RE = re.compile(r'\bPASS\b', re.IGNORECASE)
+        _FAIL_RE = re.compile(r'\bFAIL\b', re.IGNORECASE)
+
+        first_line = raw_output.strip().splitlines()[0] if raw_output.strip() else ""
+        prefix_50  = raw_output.strip()[:50]
+
+        if _PASS_RE.search(first_line) and not _FAIL_RE.search(first_line):
+            pass_fail = "PASS"
+        elif _FAIL_RE.search(first_line) and not _PASS_RE.search(first_line):
+            pass_fail = "FAIL"
+        elif _PASS_RE.search(prefix_50):
+            pass_fail = "PASS"
+        elif _FAIL_RE.search(prefix_50):
+            pass_fail = "FAIL"
+        else:
+            # 최후 fallback: 전체 텍스트에서 탐지 (기존 동작 유지)
+            pass_fail = "PASS" if _PASS_RE.search(raw_output) else "FAIL"
+
         scalar_score = REWARD_PASS if pass_fail == "PASS" else REWARD_FAIL
 
         return RewardSignal(
