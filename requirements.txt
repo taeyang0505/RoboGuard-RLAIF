@@ -1,0 +1,8 @@
+langchain
+langchain-chroma
+langchain-google-genai
+pypdf
+chromadb
+python-dotenv
+langgraph
+requests
