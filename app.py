@@ -1,22 +1,18 @@
 """
-app.py — RoboGuard RLAIF 웹 채팅 UI
-=====================================
-Streamlit 기반 채팅 인터페이스.
-roboguard 패키지의 백엔드 엔진을 그대로 호출합니다.
+app.py — RoboGuard Streamlit chat UI.
 
-Phase 1 — Source Citation:
-  답변 말미의 출처 표기를 UI에서도 그대로 렌더링합니다.
+A Streamlit-based chat interface that calls the roboguard backend directly.
 
-Phase 1 — Streaming UI:
-  st.status 컨텍스트로 LangGraph 각 노드 진행 상황을 실시간 중계합니다.
-  최종 답변은 st.write_stream generator를 통해 타자 출력 방식으로 렌더링합니다.
+Features:
+  Source citation  : Reference page numbers are surfaced inline in each response.
+  Streaming UI     : st.status relays per-node pipeline progress in real time;
+                     the final answer is rendered word-by-word via st.write_stream.
+  Vision RAG       : A sidebar file uploader accepts PNG/JPG images, encodes them
+                     in Base64, and injects them into the LangGraph initial state so
+                     Gemini Vision can cross-reference visual observations against
+                     the manual context.
 
-Phase 3 — Multimodal Vision RAG:
-  사이드바 파일 업로더로 PNG/JPG 이미지를 수신하고 Base64로 인코딩하여
-  LangGraph 초기 상태에 image_b64로 주입합니다.
-  Gemini Vision 모델이 이미지를 시각 분석하고 매뉴얼 컨텍스트와 교차 검증합니다.
-
-실행 방법:
+Usage:
   ./.venv/bin/streamlit run app.py
 """
 import re
@@ -31,7 +27,7 @@ from roboguard.graph_builder import RoboGuardGraph
 
 load_dotenv()
 
-# ─── 페이지 기본 설정 ──────────────────────────────────────────────────────
+# ─── Page setup ────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="RoboGuard — UR10e Technical Support",
     page_icon="⚙️",
@@ -39,23 +35,23 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── 커스텀 CSS ────────────────────────────────────────────────────────────
+# ─── Custom CSS ────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* 전체 배경 */
+/* page background */
 .stApp {
     background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
     color: #e8e8f0;
 }
 
-/* 사이드바 */
+/* sidebar */
 [data-testid="stSidebar"] {
     background: rgba(255,255,255,0.05);
     border-right: 1px solid rgba(255,255,255,0.1);
     backdrop-filter: blur(12px);
 }
 
-/* 채팅 입력창 */
+/* chat input */
 [data-testid="stChatInput"] textarea {
     background: rgba(255,255,255,0.08) !important;
     border: 1px solid rgba(255,255,255,0.2) !important;
@@ -63,7 +59,7 @@ st.markdown("""
     border-radius: 12px !important;
 }
 
-/* 사용자 말풍선 */
+/* user message bubble */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
     background: rgba(99,102,241,0.15);
     border: 1px solid rgba(99,102,241,0.3);
@@ -72,7 +68,7 @@ st.markdown("""
     margin: 6px 0;
 }
 
-/* AI 말풍선 */
+/* assistant message bubble */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
     background: rgba(16,185,129,0.08);
     border: 1px solid rgba(16,185,129,0.2);
@@ -81,7 +77,7 @@ st.markdown("""
     margin: 6px 0;
 }
 
-/* 메트릭 박스 */
+/* metric card */
 .metric-card {
     background: rgba(255,255,255,0.06);
     border: 1px solid rgba(255,255,255,0.12);
@@ -91,7 +87,7 @@ st.markdown("""
     backdrop-filter: blur(8px);
 }
 
-/* PASS 배지 */
+/* PASS badge */
 .badge-pass {
     display: inline-block;
     background: linear-gradient(90deg, #059669, #10b981);
@@ -104,7 +100,7 @@ st.markdown("""
     letter-spacing: 0.04em;
 }
 
-/* FAIL 배지 */
+/* FAIL badge */
 .badge-fail {
     display: inline-block;
     background: linear-gradient(90deg, #dc2626, #ef4444);
@@ -117,7 +113,7 @@ st.markdown("""
     letter-spacing: 0.04em;
 }
 
-/* RL 루프 카운터 */
+/* RL loop counter badge */
 .rl-badge {
     display: inline-block;
     background: rgba(139,92,246,0.25);
@@ -129,7 +125,7 @@ st.markdown("""
     margin-left: 8px;
 }
 
-/* 사이드바 논문 카드 */
+/* sidebar paper card */
 .paper-card {
     background: rgba(255,255,255,0.05);
     border-left: 3px solid;
@@ -140,7 +136,7 @@ st.markdown("""
     line-height: 1.5;
 }
 
-/* 헤더 타이틀 */
+/* hero header title */
 .hero-title {
     font-size: 1.6rem;
     font-weight: 800;
@@ -154,7 +150,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ─── 사이드바 ──────────────────────────────────────────────────────────────
+# Sidebar ────────────────
 with st.sidebar:
     st.markdown('<div class="hero-title">⚙️ RoboGuard</div>', unsafe_allow_html=True)
     st.caption("UR10e Technical Support System — Document-Grounded QA")
@@ -228,53 +224,47 @@ with st.sidebar:
     st.caption("RoboGuard v3.0 — Vision RAG · Source Citation · Streaming UI")
 
 
-# ─── 세션 상태 초기화 ─────────────────────────────────────────────────
+# Session state initialisation ─────────────────────────────────────────
 if "messages" not in st.session_state:
-    st.session_state.messages = []   # 채팅 메시지 히스토리
+    st.session_state.messages = []           # chat history
 if "stats" not in st.session_state:
-    st.session_state.stats = []      # 각 응답의 RL 통계
+    st.session_state.stats = []              # per-response RL metrics
 if "pending_image_b64" not in st.session_state:
-    st.session_state.pending_image_b64 = None  # Phase 3: 업로드 대기 중 이미지
+    st.session_state.pending_image_b64 = None  # queued Vision RAG image
 
 
-# ─── LangGraph 앱 캐싱 (매 질문마다 재빌드 방지) ──────────────────────────
+# Cache the compiled graph so it isn't rebuilt on every Streamlit rerun.────
 @st.cache_resource(show_spinner="Initializing inference pipeline...")
 def get_app():
     """Builds and caches the RoboGuardGraph compiled pipeline."""
     return RoboGuardGraph().build()
 
 
-# ─── HTML 태그 제거 헬퍼 ─────────────────────────────────────────────────
+# HTML tag cleanup helper────────
 def _clean_answer(text: str) -> str:
-    """
-    LLM 답변 본문에 삽입된 <br/> / <br> / <BR> 등 줄바꿈 HTML 태그를
-    순수 마크다운 줄바꿈(\n\n)으로 변환합니다.
+    """Replace <br> variants in LLM output with Markdown double newlines.
 
     Args:
-        text: LLM이 반환한 원본 답변 문자열
+        text: Raw answer string returned by the LLM.
     Returns:
-        HTML 태그가 제거된 마크다운 문자열
+        Answer string with HTML line-break tags replaced by \n\n.
     """
-    # <br/>, <br />, <br> 계열을 모두 \n\n으로 치환
     return re.sub(r"<br\s*/?>" , "\n\n", text, flags=re.IGNORECASE)
 
 
-# ─── 스트리밍 헬퍼: 단어 단위 generator ──────────────────────────────────
+# Word-by-word streaming generator────
 def _token_stream(text: str, delay: float = 0.012):
-    """
-    단어 단위로 텍스트를 분할하여 yield합니다.
-    st.write_stream()에 전달하면 타자 출력 효과가 적용됩니다.
+    """Yield the text word-by-word with a short delay for a typewriter effect.
 
     Args:
-        text : 출력할 전체 텍스트 (HTML 태그가 제거된 상태)
-        delay: 단어 간 지연 시간 (초)
+        text : Full cleaned response string.
+        delay: Seconds between words.
     """
     for word in text.split(" "):
         yield word + " "
         time.sleep(delay)
 
-
-# ─── 메인 헤더 ──────────────────────────────────────────────────
+# Main header ───────────
 st.markdown('<div class="hero-title">⚙️ RoboGuard — UR10e Technical Support</div>', unsafe_allow_html=True)
 st.markdown(
     "Document-grounded QA system for UR10e robot operations. "
@@ -282,12 +272,12 @@ st.markdown(
 )
 st.divider()
 
-# ─── 이전 대화 기록 렌더링 ────────────────────────────────────────────────
+# Render conversation history ──────────────
 for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "⚙️"):
         st.markdown(msg["content"])
 
-        # Phase 3: 사용자 메시지에 이미지 썸네일 표시 (히스토리 재렌더링)
+        # Show attached image thumbnail when replaying history
         if msg["role"] == "user":
             msg_idx = i // 2
             if msg_idx < len(st.session_state.stats):
@@ -322,7 +312,7 @@ for i, msg in enumerate(st.session_state.messages):
             )
 
 
-# ─── 채팅 입력 처리 ───────────────────────────────────────────────────────
+# Chat input handler ────────────
 if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum payload capacity)"):
 
     # 1) User message
@@ -330,7 +320,7 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
-        # Phase 3: 현재 메시지에 첨부 이미지 표시
+        # Show attached image below the user's message
         if image_b64_current:
             st.image(
                 base64.b64decode(image_b64_current),
@@ -341,7 +331,7 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
     # 2) Assistant response
     with st.chat_message("assistant", avatar="⚙️"):
 
-        # ── Phase 1: st.status 실시간 상태 중계 ──────────────────────────
+        # st.status: relay per-node pipeline progress in real time
         result: dict = {}
         elapsed: float = 0.0
 
@@ -351,12 +341,8 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
             langgraph_app = get_app()
             t0 = time.time()
 
-            # LangGraph invoke — 백엔드 실행 (동기)
-            # invoke가 완료되면 st.status 내 단계를 단계별로 업데이트합니다.
-            # 단, LangGraph는 동기 실행이므로 노드 완료 시점을 폴링하는 대신
-            # invoke 전/후로 상태를 분리하여 표시합니다.
-
-            # 백그라운드 스레드로 invoke 실행 → 메인 스레드에서 상태 중계
+            # Run LangGraph in a background thread so Streamlit can update
+            # the st.status panel while inference is in progress.
             result_queue: queue.Queue = queue.Queue()
 
             def _run_graph() -> None:
@@ -376,7 +362,7 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
             thread = threading.Thread(target=_run_graph, daemon=True)
             thread.start()
 
-            # 중계 메시지 — 각 단계를 순차적으로 표시
+            # Progress relay: display stage messages as wall-clock time elapses
             stage_delays = [
                 (3.0,  "**[2/3]** Generating initial response from retrieved context (base policy)."),
                 (6.0,  "**[3/3]** Running fact-verification via LLM-as-a-judge."),
@@ -395,7 +381,7 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
             result = result_queue.get()
             elapsed = time.time() - t0
 
-            # 재시도가 발생한 경우 추가 상태 표시
+            # If the pipeline ran revision cycles, surface that in the status panel
             retries = max(0, result.get("retry_count", 1) - 1)
             if retries > 0:
                 status_box.write(
@@ -409,16 +395,15 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
                 expanded=False,
             )
 
-        # ── Phase 1: 결과 추출 ────────────────────────────────────────────
-        answer      = _clean_answer(result.get("answer", ""))  # <br/> → \n\n
+        # Extract result fields and render streaming answer
+        answer      = _clean_answer(result.get("answer", ""))
         pass_fail   = result.get("pass_fail", "PASS")
         traj_cnt    = len(result.get("trajectory_log", []))
         src_pages   = result.get("source_pages", [])
 
-        # ── Phase 1: st.write_stream — 타자 출력 스트리밍 ────────────────
         st.write_stream(_token_stream(answer))
 
-        # ── 검증 배지 + 출처 표기 ─────────────────────────────────────────
+        # Verification badge and source page reference────
         badge_class = "badge-pass" if pass_fail == "PASS" else "badge-fail"
         badge_label = "Verified — PASS" if pass_fail == "PASS" else "Unverified — FAIL"
         pages_str = (
@@ -432,12 +417,12 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
             unsafe_allow_html=True
         )
 
-        # ── FAIL 시 평가자 피드백 표시 ────────────────────────────────────
+        # Show evaluator rationale on FAIL
         if pass_fail == "FAIL" and result.get("feedback"):
             with st.expander("Evaluator Feedback — Fact-Verification Detail"):
                 st.warning(result["feedback"])
 
-        # ── 재시도 이력 로그 (재작성이 발생한 경우) ──────────────────────
+        # Show revision log when at least one retry occurred
         if retries > 0 and traj_cnt > 0:
             with st.expander(f"Revision & Inference Log ({traj_cnt} attempt(s))"):
                 for idx, ep in enumerate(result["trajectory_log"], 1):
@@ -446,14 +431,14 @@ if prompt := st.chat_input("Enter a question about the UR10e robot (e.g. maximum
                     st.caption(ep.get("answer", "")[:300] + "...")
                     st.divider()
 
-    # 3) Save to session state
+    # 3) Persist to session state
     st.session_state.messages.append({"role": "assistant", "content": answer})
     st.session_state.stats.append({
         "pass_fail":   pass_fail,
         "retries":     retries,
         "elapsed":     elapsed,
         "source_pages": src_pages,
-        "image_b64":   image_b64_current,  # Phase 3: 썬네일 재렌더링 용
+        "image_b64":   image_b64_current,  # stored for thumbnail re-rendering in history
     })
-    # Phase 3: 다음 질문에서 동일 이미지가 중복 로드되지 않도록
-    # 사이드바 uploader는 Streamlit 자체 상태로 관리되므로 별도 reset 불필요
+    # The sidebar uploader is managed by Streamlit's own state, so no manual
+    # reset is needed to prevent the same image from attaching to the next query.

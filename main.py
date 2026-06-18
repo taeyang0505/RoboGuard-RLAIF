@@ -1,14 +1,13 @@
 """
-main.py — 단일 질의응답 실행 진입점
-=====================================
-RoboGuard RLAIF 에이전트를 단일 질문으로 실행합니다.
+main.py — CLI entry point for single-query execution.
 
-CLI 사용 예시:
+Runs the RoboGuard RLAIF agent against a single question and prints
+a structured summary of the response and pipeline metrics.
+
+Usage:
   python main.py
-  python main.py --question "UR10e의 최대 적재량은?"
-  python main.py -q "Protective Stop 해제 절차를 알려주세요."
-
-[4_rlaif_agent.py 베이스라인의 __main__ 블록을 CLI 모듈로 격상]
+  python main.py --question "What is the maximum payload of the UR10e?"
+  python main.py -q "How do I clear a Protective Stop?"
 """
 import argparse
 import time
@@ -26,7 +25,7 @@ DEFAULT_QUESTION = (
 
 
 def main() -> None:
-    """단일 질의응답 실행 메인 함수."""
+    """Build the graph, run the query, and print results."""
     parser = argparse.ArgumentParser(
         description="RoboGuard v2 — UR10e Query Agent with Revision Loop",
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -35,7 +34,7 @@ def main() -> None:
         "--question", "-q",
         type=str,
         default=DEFAULT_QUESTION,
-        help="로봇 매뉴얼 관련 질문 (기본값: 수중 작업 IP 등급 질문)"
+        help="Natural-language question about the UR10e manual."
     )
     args = parser.parse_args()
 

@@ -1,23 +1,12 @@
 """
-policy_actor.py — RL Actor (정책 네트워크)
-==========================================
-[Reflexion §3.1 "Actor" + §3.3 "Self-Reflection" 핵심 구현]
+policy_actor.py — Answer generation actor for the RoboGuard RLAIF pipeline.
 
-Reflexion 논문의 핵심 주장 (p.4):
-  "Actor는 두 가지 모드로 동작한다:
-   1) 기본 정책(Base Policy): 환경 관찰만으로 행동 생성
-   2) 자기 반성 정책(Reflective Policy): 에피소딕 메모리 전체를 읽고
-      이전 실패를 반성한 뒤 행동을 재생성
+Provides two generation modes:
+  generate_initial()   : Produces the first answer given retrieved context.
+  reflect_and_refine() : Revises a prior answer using the accumulated failure log.
 
-   이 두 번째 모드가 명시적 가중치 업데이트 없이
-   Verbal Policy Update를 달성한다."
-
-generate_initial()   → 기본 정책 (InstructGPT SFT 단계 대응)
-reflect_and_refine() → 자기 반성 정책 (Reflexion Verbal RL 핵심)
-
-Phase 1 — Source Citation:
-  source_pages 파라미터를 받아 프롬프트에 출처 명시 지시를 포함합니다.
-  LLM은 참조 페이지를 기반으로 답변 말미에 출처를 명시합니다.
+When an image is provided (image_b64), the prompt and image are passed together
+so Gemini Vision can cross-reference visual observations against the manual.
 """
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -28,25 +17,16 @@ from .config import CONFIG
 load_dotenv()
 
 
-# ── 출처 포맷 헬퍼 ────────────────────────────────────────────────────────
-
 def _format_citation(source_pages: list[int]) -> str:
-    """
-    페이지 번호 목록을 출처 문자열로 변환합니다.
+    """Return a formatted citation string for the given page numbers.
 
-    Args:
-        source_pages: 정렬된 1-indexed 페이지 번호 목록
-    Returns:
-        "[Reference: UR10e Manual, p. 12, 15, 23]" 형태의 문자열,
-        또는 페이지 정보가 없을 경우 빈 문자열
+    Returns an empty string when source_pages is empty.
     """
     if not source_pages:
         return ""
     pages_str = ", ".join(f"p. {p}" for p in source_pages)
     return f"[Reference: UR10e User Manual, {pages_str}]"
 
-
-# ── 프롬프트 템플릿 ───────────────────────────────────────────────────────
 
 _INITIAL_PROMPT_TEMPLATE = """\
 Role: Technical documentation assistant for UR10e industrial robot systems.
@@ -74,8 +54,8 @@ Question: {question}
 Answer:"""
 
 
-# [Reflexion §3.3 "Self-Reflection Prompt"]
-# trajectory_log 전체(누적 실패 기억)를 컨텍스트에 주입하는 것이 핵심
+# On retry, the full trajectory_log is injected so the model can reason about
+# what specifically went wrong in each prior attempt.
 _REFLECTION_PROMPT_TEMPLATE = """\
 Role: Technical documentation assistant for UR10e industrial robot systems.
 
@@ -108,16 +88,10 @@ Revised Answer:"""
 
 
 def _format_trajectory(trajectory_log: list) -> str:
-    """
-    Formats the episodic memory buffer into a structured text block for LLM consumption.
+    """Serialize the trajectory log into a text block for the reflection prompt.
 
-    [Reflexion §3.2 "Episodic Memory Buffer"]
-    Each attempt entry (answer, feedback) is numbered and truncated to stay within token limits.
-
-    Args:
-        trajectory_log: List of TrajectoryEntry dicts
-    Returns:
-        Formatted string of prior attempt records
+    Each entry's answer is capped at 250 characters and feedback at 400
+    to avoid exceeding the model's context window.
     """
     lines: list[str] = []
     for i, entry in enumerate(trajectory_log, start=1):
@@ -130,25 +104,15 @@ def _format_trajectory(trajectory_log: list) -> str:
     return "\n".join(lines)
 
 
-
 class PolicyActor:
-    """
-    RL Actor — 답변 생성 정책 네트워크.
+    """Answer generation actor for the RLAIF pipeline.
 
-    [Reflexion §3.1 "Actor"]
-    현재 환경 상태(context, question)를 관찰하고
-    행동(answer)을 생성하는 정책 π를 구현합니다.
-
-    두 가지 동작 모드:
-    1. generate_initial()   : 기본 정책 π_base (InstructGPT SFT 대응)
-    2. reflect_and_refine() : 반성 정책 π_reflex (Reflexion Verbal RL 핵심)
-
-    [InstructGPT §2.1 "SFT Model"]
-    generate_initial()은 지도 학습(SFT)으로 초기화된 기본 정책에 대응합니다.
+    Calls generate_initial() for the first attempt and reflect_and_refine()
+    on subsequent retries. Automatically switches to multimodal mode when
+    an image is provided.
     """
 
     def __init__(self) -> None:
-        """Actor LLM 초기화."""
         self._llm = ChatGoogleGenerativeAI(
             model=CONFIG.model.LLM_MODEL,
             temperature=CONFIG.model.LLM_TEMPERATURE
@@ -161,19 +125,15 @@ class PolicyActor:
         source_pages: list[int] | None = None,
         image_b64: str | None = None,
     ) -> str:
-        """
-        첫 번째 답변 생성 — 기본 정책 실행 (π_base).
-
-        [InstructGPT §2.1 "SFT Policy"]
-        피드백 없이 매뉴얼(context)과 질문(question)만으로 답변을 생성합니다.
+        """Generate the first answer without any prior feedback.
 
         Args:
-            context      : 검색된 매뉴얼 컨텍스트
-            question     : 작업자 질문
-            source_pages : 참조 페이지 번호 목록 (Source Citation)
-            image_b64    : Base64 인코딩 이미지 문자열 (Phase 3 Vision RAG, 없으면 None)
+            context      : Retrieved manual context from the vector store.
+            question     : User's natural-language question.
+            source_pages : Page numbers from the retrieved chunks.
+            image_b64    : Base64-encoded image, or None for text-only mode.
         Returns:
-            생성된 답변 문자열 (말미에 출처 표기 포함)
+            Generated answer string including a trailing citation line.
         """
         citation = _format_citation(source_pages or [])
         prompt_text = _INITIAL_PROMPT_TEMPLATE.format(
@@ -181,8 +141,6 @@ class PolicyActor:
             question=question,
             citation=citation,
         )
-        # ── Phase 3: 멀티모달 / 텍스트 전용 분기 ────────────────────────────
-        # 항상 list[HumanMessage] 형태로 전달 → Sequence[MessageLikeRepresentation] 타입 보장
         if image_b64:
             message = HumanMessage(content=[
                 {"type": "text", "text": prompt_text},
@@ -200,21 +158,19 @@ class PolicyActor:
         source_pages: list[int] | None = None,
         image_b64: str | None = None,
     ) -> str:
-        """
-        실패 궤적을 읽고 자기 반성 후 답변을 재작성 — 반성 정책 (π_reflex).
+        """Revise a prior answer using the accumulated failure history.
 
-        [Reflexion §3.3 "Self-Reflection" 핵심 구현]
-        trajectory_log 전체(누적 실패 기억)를 LLM 컨텍스트에 주입하여
-        명시적 그래디언트(가중치 업데이트) 없이 Verbal Policy Update를 달성합니다.
+        The full trajectory_log is injected into the prompt so the model can
+        identify and correct the specific issues from each previous attempt.
 
         Args:
-            context        : 검색된 매뉴얼 컨텍스트
-            question       : 작업자 질문
-            trajectory_log : 과거 모든 시도의 (answer, feedback, pass_fail) 리스트
-            source_pages   : 참조 페이지 번호 목록 (Source Citation)
-            image_b64      : Base64 인코딩 이미지 문자열 (Phase 3 Vision RAG, 없으면 None)
+            context        : Retrieved manual context from the vector store.
+            question       : User's natural-language question.
+            trajectory_log : List of (answer, feedback, pass_fail) entries.
+            source_pages   : Page numbers from the retrieved chunks.
+            image_b64      : Base64-encoded image, or None for text-only mode.
         Returns:
-            재작성된 답변 문자열 (말미에 출처 표기 포함)
+            Revised answer string including a trailing citation line.
         """
         trajectory_summary = _format_trajectory(trajectory_log)
         citation = _format_citation(source_pages or [])
@@ -224,8 +180,6 @@ class PolicyActor:
             question=question,
             citation=citation,
         )
-        # ── Phase 3: 멀티모달 / 텍스트 전용 분기 ────────────────────────────
-        # 항상 list[HumanMessage] 형태로 전달 → Sequence[MessageLikeRepresentation] 타입 보장
         if image_b64:
             message = HumanMessage(content=[
                 {"type": "text", "text": prompt_text},

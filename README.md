@@ -5,10 +5,15 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2%2B-1C3C3C?style=flat-square&logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
+[![LangChain](https://img.shields.io/badge/LangChain-0.3%2B-1C3C3C?style=flat-square&logo=langchain&logoColor=white)](https://python.langchain.com/)
+[![LangSmith](https://img.shields.io/badge/LangSmith-MLOps-F97316?style=flat-square&logo=langchain&logoColor=white)](https://smith.langchain.com/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.58-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
-[![Chroma](https://img.shields.io/badge/ChromaDB-Local-orange?style=flat-square)](https://www.trychroma.com/)
+[![Chroma](https://img.shields.io/badge/ChromaDB-Local-E97627?style=flat-square)](https://www.trychroma.com/)
 [![Gemini](https://img.shields.io/badge/Gemini-2.5%20Flash-4285F4?style=flat-square&logo=google&logoColor=white)](https://deepmind.google/technologies/gemini/)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![Vision RAG](https://img.shields.io/badge/Vision%20RAG-Multimodal-8B5CF6?style=flat-square&logo=google&logoColor=white)](roboguard/policy_actor.py)
+[![RLAIF](https://img.shields.io/badge/RLAIF-Self--Correction%20Loop-10B981?style=flat-square)](roboguard/graph_builder.py)
+[![Eval](https://img.shields.io/badge/Eval-5%2F5%20PASS-16A34A?style=flat-square&logo=checkmarx&logoColor=white)](eval_report_v2.csv)
+[![License](https://img.shields.io/badge/License-MIT-6B7280?style=flat-square)](LICENSE)
 
 ---
 

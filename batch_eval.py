@@ -1,15 +1,10 @@
 """
-batch_eval.py — 다중 질문 스트레스 테스트 및 CSV 리포트 추출
-=============================================================
-Golden Dataset에 정의된 5개의 고난도 실무 질문으로
-RLAIF 에이전트를 배치 평가하고 결과를 CSV로 저장합니다.
+batch_eval.py — Golden dataset stress-test and CSV report generator.
 
-[InstructGPT §3 "Experiments" 평가 프레임워크 참조]
-논문이 다양한 프롬프트 카테고리로 모델을 평가했듯이,
-이 스크립트는 다양한 난이도와 유형의 질문으로 에이전트의
-#   - Out-of-scope boundary testing
+Runs the RLAIF agent against a fixed set of five domain-specific questions
+and saves per-query metrics (verdict, revision count, elapsed time) to a CSV.
 
-사용법:
+Usage:
   python batch_eval.py
 """
 import csv
@@ -22,14 +17,9 @@ from roboguard.graph_builder import RoboGuardGraph
 load_dotenv()
 
 
-# ─── Golden Dataset: 5개 고난도 실무 질문 ─────────────────────────────────
-# [InstructGPT §3.4 "Prompt Dataset 구성 원칙" 적용]
-# 다양한 실패 모드를 유발하는 질문을 골고루 배치합니다:
-#   - 장애 복구 절차 (다단계 순서 추론)
-#   - 정밀 수치 인용 (수치 강박 테스트)
-#   - Out-of-scope boundary test (external knowledge detection)
-#   - 안전 규정 (매뉴얼 방어 테스트)
-#   - 복합 수치 (페이로드 + 도달 범위)
+# Golden dataset: five questions covering distinct failure modes.
+# Designed to stress-test: fault recovery, numerical precision,
+# out-of-scope boundary detection, safety specs, and core specifications.
 GOLDEN_DATASET: list[dict] = [
     {
         "id": "Q1",
@@ -78,15 +68,10 @@ GOLDEN_DATASET: list[dict] = [
 
 
 def run_batch_eval() -> None:
-    """
-    Runs the full golden dataset sequentially and saves results to a CSV report.
+    """Run the full golden dataset sequentially and write results to a CSV report.
 
-    [InstructGPT §3 "Experiments"]
-    Records the following metrics per query:
-    - Final response text
-    - Fact-verification result (PASS / FAIL)
-    - Number of revision cycles
-    - Elapsed time (seconds)
+    Records per-query metrics: final response, verification verdict,
+    revision cycle count, and elapsed time.
     """
     print("-" * 75)
     print("[INFO] RoboGuard — Batch Evaluation Pipeline")
