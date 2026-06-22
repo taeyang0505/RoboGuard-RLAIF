@@ -106,6 +106,25 @@ evaluate → should_continue()
 
 ---
 
+## 🛠 Implementation Details & RAG Optimization
+
+### 1. Data Pipeline & Context Preservation
+- **Chunking with Overlaps**: 방대한 영문 로봇 매뉴얼을 Vector DB에 적재할 때, 문맥 단절(Context Fragmentation)로 인한 정보 누락을 방지하고자 텍스트 스플리터 단계에서 **청크 간 중첩(Overlap)**을 설정하여 지식 검색의 무결성을 확보했습니다.
+
+### 2. Multi-Modal LLM-as-a-Judge (RLAIF)
+- **Critical Exception Directive**: 이미지 입력 시 시각 정보가 오판되어 환각(Hallucination)으로 잘못 분류되는 것을 막기 위해, Judge 모델에 엄격한 지시어 프롬프트를 적용하여 시각적 사실과 매뉴얼 내용 간의 충실성(Faithfulness)을 정교하게 평가합니다.
+- **Conditional Edge Control**: LangGraph 내부에 Judge 노드를 개입시킨 RLAIF 자가 검증 루프를 구축했으며, `[PASS]`/`[FAIL]` 토큰 반환 결과에 따라 Conditional Edge를 통해 에이전트의 실행 흐름(재작성 또는 종료)을 동적으로 제어합니다.
+
+### 3. Reflexion-based Verbal RL (Training-Free)
+- **Episodic Memory Injection**: Instead of traditional RL methods like PPO or DPO that require weight updates and are difficult to apply in real-time, we adopted a **Verbal RL** approach. It formats the context of failed attempts (responses and feedback) into a `trajectory_log` and cumulatively injects it into the next generation prompt.
+- **Search Cost Optimization**: When hallucinations are detected, we optimize inference cost and time by reusing existing retrieval results and enabling the model to perform self-correction, rather than executing a costly re-retrieval from scratch.
+
+### 4. Automated Evaluation Pipeline
+- **Fault-Tolerant Judge System**: Built a large-scale LLM-as-a-Judge evaluation network based on Gemini to evaluate over 4,000 custom datasets. To ensure consistent evaluation, we achieved fault-tolerance by applying `Temperature 0.0` control and Regex Parsing.
+- **Inference Optimization**: To optimize the evaluation pipeline, caching and multi-threading techniques were introduced for the local model inference results of the control group without parameter impact, reducing experiment duration and local GPU computation by up to 60%.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology | Role |
@@ -260,9 +279,9 @@ Every inference run is automatically traced in LangSmith. The waterfall view sho
 
 | Priority | Item | Description |
 |----------|------|-------------|
-| **P1** | Re-Retrieval on FAIL | 환각 탐지 시 현재는 Reflexion 기반 에피소딕 메모리 재주입으로 교정하나, 향후 쿼리 재작성(Query Rewriting) 후 Vector DB를 재검색하는 동적 검색 루프로 확장 가능. |
-| **P2** | Async Streaming UI | LangGraph 노드 진행 상황을 실시간 스트리밍으로 UI에 중계. 체감 대기시간 단축 및 단계별 상태 가시성 확보. |
-| **P3** | Batch Eval Refresh | 현재 5-query 골든 데이터셋을 Vision RAG + 멀티모달 시나리오로 확장하여 이미지 입력 포함 회귀 테스트 자동화. |
+| **P1** | Re-Retrieval on FAIL | Currently, hallucinations are corrected via Reflexion-based episodic memory injection. This can be expanded into a dynamic retrieval loop that rewrites the query and re-searches the Vector DB upon a `FAIL`. |
+| **P2** | Async Streaming UI | Stream LangGraph node progression to the UI in real-time. This will reduce perceived latency and provide step-by-step state visibility. |
+| **P3** | Batch Eval Refresh | Expand the current 5-query golden dataset into Vision RAG and multimodal scenarios to automate regression testing, including image inputs. |
 
 ---
 
