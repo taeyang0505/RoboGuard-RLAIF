@@ -1,7 +1,6 @@
 # RoboGuard — UR10e RLAIF Technical Support System
 
-> 산업용 로봇 매뉴얼 기반, 환각(Hallucination) 방지를 위해 최신 강화학습(RLAIF) 아키텍처를 도입한 엔터프라이즈 RAG 에이전트.  
-> An enterprise-grade RAG agent for UR10e robot technical support, applying RLAIF (Reinforcement Learning from AI Feedback) to achieve verifiable, document-grounded responses.
+> A RAG agent for UR10e robot technical support that applies RLAIF (Reinforcement Learning from AI Feedback) to keep responses grounded in the source manual and reduce hallucination.
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2%2B-1C3C3C?style=flat-square&logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
@@ -17,45 +16,45 @@
 
 ---
 
-## Key Business Value
+## Key Design Goals
 
 | Dimension | Description |
 |-----------|-------------|
-| **Zero-Cost Infrastructure** | Gemini 2.5 Flash + Local Chroma DB 조합으로 별도 클라우드 Vector DB 없이 운영. 인프라 유지 비용 최소화. |
-| **Defensive AI (True Negative)** | 매뉴얼에 존재하지 않는 질문("수심 10m 수중 작업 가능 여부")에 대해 모른다고 명확히 응답하는 산업 안전 관점의 팩트체크 방어 로직 구현. |
-| **Production-Grade Modularity** | 단일 스크립트(prototype)에서 Environment / State / Reward Model / Policy Actor를 OOP로 완전 분리. 컴포넌트 단독 테스트 및 교체 가능. |
-| **Verifiable Output** | LLM-as-a-judge가 매 응답에 `[PASS]`/`[FAIL]` 검증 토큰을 발행. 답변의 근거를 추적 가능한 구조로 설계. |
+| Zero-Cost Infrastructure | Runs on Gemini 2.5 Flash + local ChromaDB with no additional cloud vector DB, keeping infrastructure costs minimal. |
+| Defensive AI (True Negative) | Returns an explicit "information not available" response for questions outside the manual scope (e.g., underwater operation feasibility), rather than generating a plausible but unsupported answer. |
+| Modular Architecture | Environment, State, Reward Model, and Policy Actor are separated into independent OOP components, each testable and replaceable individually. |
+| Verifiable Output | An LLM-as-a-judge issues a `[PASS]`/`[FAIL]` verdict on every response, making the grounding of each answer traceable. |
 
 ---
 
 ## Core Architecture
 
-이 시스템은 3개의 최신 RL/RAG 논문의 핵심 아이디어를 단일 LangGraph 파이프라인으로 통합합니다.
+This system integrates key ideas from three RL/RAG papers into a single LangGraph pipeline.
 
 ### InstructGPT (Ouyang et al., 2022) — Reward Model
 
 > *"We train a reward model to predict which model output our labelers would prefer."*
 
-- **구현**: Gemini LLM을 인간 레이블러 대신 LLM-as-a-judge로 활용하는 **Reward Model** 설계.
-- 문서 기반 사실 검증 결과를 스칼라 보상(`+1.0` PASS / `-1.0` FAIL)으로 이산화.
-- 구현 위치: [`roboguard/reward_model.py`](roboguard/reward_model.py)
+- Uses Gemini as an LLM-as-a-judge in place of human labelers, acting as the reward model.
+- Factual verification against the source document is discretized into a scalar reward (`+1.0` PASS / `-1.0` FAIL).
+- Implementation: [`roboguard/reward_model.py`](roboguard/reward_model.py)
 
 ### Reflexion (Shinn et al., 2023) — Episodic Memory & Verbal RL
 
 > *"The agent explicitly stores experiences in and reasons over a linguistic memory to iteratively refine responses."*
 
-- **구현**: 실패한 시도(answer, feedback)를 `trajectory_log`에 누적하는 **에피소딕 메모리 버퍼** 구현.
-- 메모리 전체를 다음 생성 프롬프트에 주입하여, **가중치 업데이트 없이 Verbal Policy Update**를 달성.
-- `generate_initial()` (기본 정책 π_base) vs. `reflect_and_refine()` (반성 정책 π_reflex) 2-mode Actor 구조.
-- 구현 위치: [`roboguard/policy_actor.py`](roboguard/policy_actor.py), [`roboguard/state.py`](roboguard/state.py)
+- Failed attempts (answer, feedback) are accumulated in `trajectory_log` as an episodic memory buffer.
+- The full memory is injected into the next generation prompt, achieving verbal policy update without weight updates.
+- `generate_initial()` (base policy π_base) vs. `reflect_and_refine()` (reflection policy π_reflex) — 2-mode actor structure.
+- Implementation: [`roboguard/policy_actor.py`](roboguard/policy_actor.py), [`roboguard/state.py`](roboguard/state.py)
 
 ### Self-RAG (Asai et al., 2023) — Critique Tokens & Active Environment
 
 > *"Self-RAG trains an LM to retrieve, generate, and critique its own outputs using special tokens."*
 
-- **구현**: `[PASS]`/`[FAIL]` 구조화 Critique Token을 Critic 프롬프트 출력에서 파싱하여 라우팅 신호로 사용.
-- 검색(Retrieval)을 전처리 단계가 아닌 RL **능동적 환경(Environment)**으로 모델링. `gym.Env.step()` 인터페이스 패턴 적용.
-- 구현 위치: [`roboguard/environment.py`](roboguard/environment.py)
+- `[PASS]`/`[FAIL]` critique tokens are parsed from critic prompt output and used as routing signals.
+- Retrieval is modeled as an active RL environment rather than a preprocessing step, applying the `gym.Env.step()` interface pattern.
+- Implementation: [`roboguard/environment.py`](roboguard/environment.py)
 
 ---
 
@@ -95,7 +94,7 @@ flowchart TD
     style F fill:#292524,stroke:#f59e0b,color:#fde68a
 ```
 
-**RL 루프 제어 로직:**
+RL loop control logic:
 
 ```
 evaluate → should_continue()
@@ -106,22 +105,22 @@ evaluate → should_continue()
 
 ---
 
-## 🛠 Implementation Details & RAG Optimization
+## Implementation Details & RAG Optimization
 
 ### 1. Data Pipeline & Context Preservation
-- **Chunking with Overlaps**: 방대한 영문 로봇 매뉴얼을 Vector DB에 적재할 때, 문맥 단절(Context Fragmentation)로 인한 정보 누락을 방지하고자 텍스트 스플리터 단계에서 **청크 간 중첩(Overlap)**을 설정하여 지식 검색의 무결성을 확보했습니다.
+- Chunking with Overlaps: When ingesting the robot manual into the vector DB, chunk overlap is configured in the text splitter to reduce context fragmentation across chunk boundaries.
 
 ### 2. Multi-Modal LLM-as-a-Judge (RLAIF)
-- **Critical Exception Directive**: 이미지 입력 시 시각 정보가 오판되어 환각(Hallucination)으로 잘못 분류되는 것을 막기 위해, Judge 모델에 엄격한 지시어 프롬프트를 적용하여 시각적 사실과 매뉴얼 내용 간의 충실성(Faithfulness)을 정교하게 평가합니다.
-- **Conditional Edge Control**: LangGraph 내부에 Judge 노드를 개입시킨 RLAIF 자가 검증 루프를 구축했으며, `[PASS]`/`[FAIL]` 토큰 반환 결과에 따라 Conditional Edge를 통해 에이전트의 실행 흐름(재작성 또는 종료)을 동적으로 제어합니다.
+- Critical Exception Directive: When image input is provided, a strict directive prompt is applied to the judge model to prevent visual observations from being misclassified as hallucination. The judge evaluates faithfulness between what is visible in the image and what is stated in the manual.
+- Conditional Edge Control: A judge node is inserted into the LangGraph pipeline. Based on the `[PASS]`/`[FAIL]` verdict, a conditional edge routes execution to either revision or termination.
 
 ### 3. Reflexion-based Verbal RL (Training-Free)
-- **Episodic Memory Injection**: Instead of traditional RL methods like PPO or DPO that require weight updates and are difficult to apply in real-time, we adopted a **Verbal RL** approach. It formats the context of failed attempts (responses and feedback) into a `trajectory_log` and cumulatively injects it into the next generation prompt.
-- **Search Cost Optimization**: When hallucinations are detected, we optimize inference cost and time by reusing existing retrieval results and enabling the model to perform self-correction, rather than executing a costly re-retrieval from scratch.
+- Episodic Memory Injection: Instead of gradient-based RL methods that require weight updates (e.g., PPO, DPO), this implementation uses verbal RL — formatting failed attempts (responses and feedback) into a `trajectory_log` and injecting it cumulatively into the next generation prompt.
+- Search Cost Optimization: On hallucination detection, existing retrieval results are reused for self-correction rather than triggering a re-retrieval, reducing API calls within a single session.
 
 ### 4. Automated Evaluation Pipeline
-- **Golden Dataset Design**: Built a Gemini-based LLM-as-a-Judge evaluation pipeline tested against a **5-query golden dataset**, each question designed to represent a distinct failure mode: fault recovery, numerical precision, out-of-scope boundary detection, safety specification, and core specifications. Consistent evaluation is ensured via `Temperature 0.0` and regex-based `[PASS]`/`[FAIL]` verdict parsing.
-- **Search Cost Optimization**: On `FAIL` detection, the pipeline reuses cached retrieval results for the Reflexion self-correction loop rather than executing a costly re-retrieval from scratch, reducing redundant Gemini API calls within a single evaluation run.
+- Golden Dataset Design: An LLM-as-a-judge evaluation pipeline is run against a 5-query golden dataset, each question covering a distinct failure mode: fault recovery, numerical precision, out-of-scope boundary detection, safety specification, and core specifications. Consistent evaluation is ensured via `Temperature 0.0` and regex-based `[PASS]`/`[FAIL]` verdict parsing.
+- Search Cost Optimization: On `FAIL` detection, the pipeline reuses cached retrieval results for the Reflexion self-correction loop rather than executing a re-retrieval, reducing redundant Gemini API calls within a single evaluation run.
 
 ---
 
@@ -144,7 +143,7 @@ evaluate → should_continue()
 ```
 RoboGuard-RAG/
 │
-├── roboguard/                  # Core package — production-grade modular architecture
+├── roboguard/                  # Core package — modular architecture
 │   ├── __init__.py
 │   ├── config.py               # Centralized frozen dataclass configuration (ModelConfig, RLConfig)
 │   ├── state.py                # AgentState (TypedDict) + TrajectoryEntry — Reflexion episodic memory
@@ -242,7 +241,7 @@ The following results were obtained by running `batch_eval.py` against a 5-query
 | Q4 | Safety Specification | PASS | 0 |
 | Q5 | Core Specifications | PASS | 0 |
 
-**PASS rate: 5/5 (100%)** — including the out-of-scope boundary test (Q3), which is the primary hallucination risk scenario.
+PASS rate: 5/5 (100%) — Q3 (out-of-scope boundary test) is the primary hallucination risk scenario and required one revision cycle before passing.
 
 > Full results are available in [`eval_report_v2.csv`](eval_report_v2.csv).
 
@@ -252,7 +251,7 @@ The following results were obtained by running `batch_eval.py` against a 5-query
 
 ### Vision RAG — Multimodal Query (PASS)
 
-A robot image is attached alongside the question. Gemini Vision performs a visual analysis of the hardware (joint count, cable types, warning labels), cross-references the findings against the UR10e manual, and returns a `Verified — PASS` response with source page citations in **16.1s** with zero revision cycles.
+A robot image is attached alongside the question. Gemini Vision analyzes the hardware (joint count, cable types, warning labels), cross-references the findings against the UR10e manual, and returns a `Verified — PASS` response with source page citations in 16.1s with zero revision cycles.
 
 ![Vision RAG PASS demo](roboguard/assets/demo_vision.png)
 
@@ -260,7 +259,7 @@ A robot image is attached alongside the question. Gemini Vision performs a visua
 
 ### RLAIF Self-Correction Loop — Revision Cycles (FAIL → Retry)
 
-The same Vision RAG query under a harder hallucination-detection threshold. The judge model flags the first two responses as `FAIL` (visual observations not explicitly backed by the manual), triggering Reflexion-based episodic memory injection and re-generation. Total elapsed: **66.3s** across 3 attempts (2 revision cycles). The revision log and evaluator feedback are expandable inline.
+The same Vision RAG query under a stricter hallucination-detection threshold. The judge model flags the first two responses as `FAIL` (visual observations not explicitly backed by the manual), triggering Reflexion-based episodic memory injection and re-generation. Total elapsed: 66.3s across 3 attempts (2 revision cycles). The revision log and evaluator feedback are expandable inline.
 
 ![RLAIF self-correction loop with FAIL and revision cycles](roboguard/assets/demo_fail.png)
 
@@ -276,12 +275,11 @@ Every inference run is automatically traced in LangSmith. The waterfall view sho
 
 ## Future Work
 
-
 | Priority | Item | Description |
 |----------|------|-------------|
-| **P1** | Re-Retrieval on FAIL | Currently, hallucinations are corrected via Reflexion-based episodic memory injection. This can be expanded into a dynamic retrieval loop that rewrites the query and re-searches the Vector DB upon a `FAIL`. |
-| **P2** | Async Streaming UI | Stream LangGraph node progression to the UI in real-time. This will reduce perceived latency and provide step-by-step state visibility. |
-| **P3** | Batch Eval Refresh | Expand the current 5-query golden dataset into Vision RAG and multimodal scenarios to automate regression testing, including image inputs. |
+| **P1** | Re-Retrieval on FAIL | Currently, hallucinations are corrected via Reflexion-based episodic memory injection. A follow-up would be to rewrite the query and re-search the Vector DB upon a `FAIL`, rather than relying solely on cached retrieval results. |
+| **P2** | Async Streaming UI | Stream LangGraph node progression to the UI in real-time to reduce perceived latency and provide step-by-step state visibility. |
+| **P3** | Batch Eval Refresh | Expand the current 5-query golden dataset to cover Vision RAG and multimodal scenarios, enabling regression testing that includes image inputs. |
 
 ---
 
