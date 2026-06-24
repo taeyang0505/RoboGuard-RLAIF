@@ -120,8 +120,8 @@ evaluate → should_continue()
 - **Search Cost Optimization**: When hallucinations are detected, we optimize inference cost and time by reusing existing retrieval results and enabling the model to perform self-correction, rather than executing a costly re-retrieval from scratch.
 
 ### 4. Automated Evaluation Pipeline
-- **Fault-Tolerant Judge System**: Built a large-scale LLM-as-a-Judge evaluation network based on Gemini to evaluate over 4,000 custom datasets. To ensure consistent evaluation, we achieved fault-tolerance by applying `Temperature 0.0` control and Regex Parsing.
-- **Inference Optimization**: To optimize the evaluation pipeline, caching and multi-threading techniques were introduced for the local model inference results of the control group without parameter impact, reducing experiment duration and local GPU computation by up to 60%.
+- **Golden Dataset Design**: Built a Gemini-based LLM-as-a-Judge evaluation pipeline tested against a **5-query golden dataset**, each question designed to represent a distinct failure mode: fault recovery, numerical precision, out-of-scope boundary detection, safety specification, and core specifications. Consistent evaluation is ensured via `Temperature 0.0` and regex-based `[PASS]`/`[FAIL]` verdict parsing.
+- **Search Cost Optimization**: On `FAIL` detection, the pipeline reuses cached retrieval results for the Reflexion self-correction loop rather than executing a costly re-retrieval from scratch, reducing redundant Gemini API calls within a single evaluation run.
 
 ---
 
